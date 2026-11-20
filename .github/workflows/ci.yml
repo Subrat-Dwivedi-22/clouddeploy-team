@@ -1,0 +1,43 @@
+name: CloudDeploy CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: clouddeploy
+          POSTGRES_USER: clouddeploy
+          POSTGRES_PASSWORD: clouddeploy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clouddeploy -d clouddeploy"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://clouddeploy:clouddeploy@localhost:5432/clouddeploy
+      JWT_SECRET: ci-only-key-with-at-least-32-characters
+      ALLOWED_IMAGES: docker.io/nginxinc/nginx-unprivileged:stable-alpine
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run migrate -w backend
+      - run: node --test backend/test/api-smoke.mjs
+      - run: docker compose config --quiet
+      - run: docker compose build
+      - run: docker build -t clouddeploy-sample:ci sample-app

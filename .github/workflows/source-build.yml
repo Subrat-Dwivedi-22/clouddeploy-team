@@ -1,0 +1,124 @@
+name: Build repository
+run-name: Build ${{ inputs.source }} at ${{ inputs.sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      source: { description: Public owner/repository, required: true, type: string }
+      sha: { description: Full commit SHA, required: true, type: string }
+      revision: { description: Deployment UUID, required: true, type: string }
+      mode: { description: Build mode, type: string, default: auto }
+      folder: { description: Website or app folder, type: string, default: "." }
+      entry: { description: Homepage or Dockerfile, type: string, default: index.html }
+      npm_build: { description: Run npm build script, type: string, default: "false" }
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Build pinned source
+        env:
+          SOURCE: ${{ inputs.source }}
+          SHA: ${{ inputs.sha }}
+          MODE: ${{ inputs.mode }}
+          FOLDER: ${{ inputs.folder }}
+          ENTRY: ${{ inputs.entry }}
+          NPM_BUILD: ${{ inputs.npm_build }}
+        run: |
+          [[ "$SOURCE" =~ ^[a-zA-Z0-9-]+/[a-zA-Z0-9_.-]+$ ]]
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          source_dir=$(mktemp -d)
+          git -C "$source_dir" init -q
+          git -C "$source_dir" fetch -q --depth 1 "https://github.com/$SOURCE.git" "$SHA"
+          safe_path='^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*(/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*)*$'
+          [[ "$FOLDER" == "." || "$FOLDER" =~ $safe_path ]]
+          [[ "$ENTRY" =~ $safe_path ]]
+          git -C "$source_dir" checkout -q --detach FETCH_HEAD
+          if [[ "$MODE" == auto ]]; then
+            MODE=static
+            if [[ -f "$source_dir/Dockerfile" ]]; then MODE=docker; ENTRY=Dockerfile; fi
+          fi
+          root="$source_dir"
+          if [[ "$FOLDER" != "." ]]; then root="$source_dir/$FOLDER"; fi
+          [[ -d "$root" && "$(realpath "$root")" == "$root" ]]
+          if [[ "$MODE" == docker ]]; then
+            [[ -f "$root/$ENTRY" && "$(realpath "$root/$ENTRY")" == "$root/$ENTRY" ]]
+            docker build -t application:build -f "$FOLDER/$ENTRY" "https://github.com/$SOURCE.git#$SHA"
+          elif [[ "$MODE" == node ]]; then
+            [[ -f "$root/package.json" && ! -L "$root/package.json" ]]
+            ctx=$(mktemp -d)
+            tree=HEAD
+            if [[ "$FOLDER" != "." ]]; then tree="HEAD:$FOLDER"; fi
+            git -C "$source_dir" archive "$tree" | tar -x -C "$ctx"
+            docker build -t application:build -f - --build-arg "NPM_BUILD=$NPM_BUILD" "$ctx" <<'DOCKERFILE'
+          FROM node:22-alpine
+          WORKDIR /app
+          RUN chown 101:101 /app
+          COPY --chown=101:101 . .
+          USER 101:101
+          ENV HOME=/tmp
+          ARG NPM_BUILD=false
+          RUN if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi
+          RUN if [ "$NPM_BUILD" = true ]; then npm run build; fi
+          ENV NODE_ENV=production PORT=8080 HOST=0.0.0.0
+          EXPOSE 8080
+          CMD ["npm", "start"]
+          DOCKERFILE
+          else
+            [[ "$MODE" == static && "$ENTRY" != */* && "$ENTRY" == *.[hH][tT][mM][lL] ]]
+            site_dir=$(mktemp -d)
+            if [[ ! -f "$root/$ENTRY" || -L "$root/$ENTRY" ]]; then
+              echo "::error::The selected homepage is missing or is not a regular HTML file."
+              exit 1
+            fi
+            (
+              cd "$root"
+              find . -name '.*' ! -name . -prune -o -type f \( \
+                -iname '*.html' -o -iname '*.css' -o -iname '*.js' -o -iname '*.mjs' \
+                -o -iname '*.svg' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \
+                -o -iname '*.webp' -o -iname '*.avif' -o -iname '*.gif' -o -iname '*.ico' \
+                -o -iname '*.woff' -o -iname '*.woff2' -o -iname '*.ttf' -o -iname '*.json' \
+              \) -print0 |
+                while IFS= read -r -d '' asset; do
+                  mkdir -p -- "$site_dir/$(dirname "$asset")"
+                  cp -- "$asset" "$site_dir/$asset"
+                done
+            )
+            cp -- "$root/$ENTRY" "$site_dir/index.html"
+            docker build -t application:build -f - "$site_dir" <<'DOCKERFILE'
+          FROM nginxinc/nginx-unprivileged:stable-alpine
+          COPY . /usr/share/nginx/html/
+          USER 101:101
+          EXPOSE 8080
+          DOCKERFILE
+          fi
+          docker save -o "$RUNNER_TEMP/image.tar" application:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: ${{ runner.temp }}/image.tar
+          retention-days: 1
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: image }
+      - name: Publish build
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          [[ "$REVISION" =~ ^[0-9a-f-]{36}$ ]]
+          target="ghcr.io/${GITHUB_REPOSITORY,,}-apps:$REVISION"
+          docker load -i image.tar
+          docker tag application:build "$target"
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for delay in 5 15 30; do
+            if docker push "$target"; then exit 0; fi
+            sleep "$delay"
+          done
+          docker push "$target"
