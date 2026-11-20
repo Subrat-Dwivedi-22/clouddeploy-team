@@ -10,6 +10,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -39,5 +40,7 @@ jobs:
       - run: npm run migrate -w backend
       - run: node --test backend/test/api-smoke.mjs
       - run: docker compose config --quiet
+      - name: Validate the local k3s configuration
+        run: docker compose -f docker-compose.yml -f compose.k3s.yml config --quiet
       - run: docker compose build
       - run: docker build -t clouddeploy-sample:ci sample-app
