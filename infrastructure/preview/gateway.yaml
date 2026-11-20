@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: clouddeploy-preview, namespace: clouddeploy-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: clouddeploy-preview, namespace: clouddeploy-workloads }
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: clouddeploy-preview, namespace: clouddeploy-workloads }
+subjects:
+  - { kind: ServiceAccount, name: clouddeploy-preview, namespace: clouddeploy-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: clouddeploy-preview }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-demo-preview, namespace: clouddeploy-workloads }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/managed-by: clouddeploy } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: clouddeploy-system } }
+          podSelector: { matchLabels: { app: clouddeploy-preview } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: clouddeploy-preview, namespace: clouddeploy-system }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: clouddeploy-preview } }
+  template:
+    metadata: { labels: { app: clouddeploy-preview } }
+    spec:
+      serviceAccountName: clouddeploy-preview
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: preview
+          image: node:22-alpine
+          command: [node, /gateway/server.mjs]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { cpu: 150m, memory: 96Mi } }
+          readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 3 }
+          volumeMounts: [{ name: code, mountPath: /gateway, readOnly: true }]
+      volumes:
+        - name: code
+          configMap: { name: clouddeploy-preview-code }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: clouddeploy-preview, namespace: clouddeploy-system }
+spec:
+  selector: { app: clouddeploy-preview }
+  ports: [{ name: preview, port: 8080, targetPort: 8080 }, { name: metrics, port: 8081, targetPort: 8081 }]

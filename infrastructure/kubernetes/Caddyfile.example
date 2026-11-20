@@ -1,0 +1,34 @@
+{
+    auto_https disable_redirects
+    on_demand_tls {
+        ask http://127.0.0.1:3102/certificate
+    }
+}
+
+{$DASHBOARD_HOST} {
+    tls {
+        issuer acme {
+            disable_http_challenge
+        }
+    }
+    reverse_proxy 127.0.0.1:3100
+}
+
+https:// {
+    tls {
+        on_demand
+        issuer acme {
+            disable_http_challenge
+        }
+    }
+    @site {
+        host *.{$PUBLIC_APP_DOMAIN}
+        header_regexp project Host ^([0-9a-f-]{36})\.
+    }
+    handle @site {
+        reverse_proxy 127.0.0.1:3102 {
+            header_up Host {re.project.1}.localhost
+        }
+    }
+    respond 404
+}
