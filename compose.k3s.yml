@@ -1,0 +1,38 @@
+services:
+  k3s:
+    ports:
+      - "127.0.0.1:3002:30082"
+    image: rancher/k3s:v1.34.3-k3s1
+    privileged: true
+    entrypoint: ["/bin/sh", "/bootstrap/start.sh"]
+    volumes:
+      - cluster-data:/var/lib/rancher/k3s
+      - api-access:/access
+      - ./infrastructure/local/start.sh:/bootstrap/start.sh:ro
+      - ./infrastructure/kubernetes/access.yaml:/bootstrap/access.yaml:ro
+      - ./infrastructure/preview:/bootstrap/preview:ro
+      - ./infrastructure/local/preview-port.yaml:/bootstrap/preview-port.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /access/token && kubectl get --raw=/readyz >/dev/null"]
+      interval: 5s
+      retries: 36
+      timeout: 4s
+  api:
+    depends_on:
+      k3s:
+        condition: service_healthy
+    environment:
+      KUBE_MODE: api
+      PREVIEW_PORT: "3002"
+      TRAFFIC_METRICS_URL: http://k3s:30083
+      KUBE_API_URL: https://k3s:6443
+      KUBE_CA_FILE: /run/cluster/ca.crt
+      KUBE_TOKEN_FILE: /run/cluster/token
+      GITHUB_BUILD_REPOSITORY: ${GITHUB_BUILD_REPOSITORY:-}
+      GITHUB_BUILD_TOKEN: ${GITHUB_BUILD_TOKEN:-}
+      GITHUB_BUILD_REF: ${GITHUB_BUILD_REF:-main}
+    volumes:
+      - api-access:/run/cluster:ro
+volumes:
+  cluster-data:
+  api-access:
