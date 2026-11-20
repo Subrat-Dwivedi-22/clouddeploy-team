@@ -1,0 +1,21 @@
+{
+  "name": "clouddeploy",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run generate -w backend && npm run build -w backend && npm run build -w frontend",
+    "test": "npm run test -w backend && node --test infrastructure/preview/traffic.test.mjs",
+    "typecheck": "npm run generate -w backend && npm run typecheck --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "typescript": "~5.9.3"
+  }
+}
