@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  projects     Project[]
+}
+
+model Project {
+  id        String       @id @default(uuid())
+  repository String?
+  buildMode String @default("auto")
+  buildFolder String @default(".")
+  entryFile String @default("index.html")
+  npmBuild Boolean @default(false)
+  ownerId   String
+  owner     User         @relation(fields: [ownerId], references: [id])
+  name      String
+  image     String
+  port      Int
+  replicas  Int
+  healthPath String?
+  resourceProfile String @default("standard")
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  history   Deployment[]
+
+  @@index([ownerId, createdAt])
+}
+
+model Deployment {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runId     String?
+  commitSha String?
+  buildSeconds Int?
+  action    String
+  outcome   String
+  detail    String
+  image     String
+  port      Int
+  replicas  Int
+  healthPath String?
+  resourceProfile String @default("standard")
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
+model BuildBudget {
+  hour DateTime @id @db.Timestamptz(6)
+  used Int
+}

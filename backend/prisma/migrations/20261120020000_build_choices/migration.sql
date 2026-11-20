@@ -1,0 +1,4 @@
+ALTER TABLE "Project" ADD COLUMN "buildMode" TEXT NOT NULL DEFAULT 'auto',
+  ADD COLUMN "buildFolder" TEXT NOT NULL DEFAULT '.',
+  ADD COLUMN "entryFile" TEXT NOT NULL DEFAULT 'index.html',
+  ADD COLUMN "npmBuild" BOOLEAN NOT NULL DEFAULT false;
